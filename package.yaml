@@ -1,0 +1,63 @@
+name:                dhall-lsp-server
+version:             0.1.0.0
+github:              "githubuser/dhall-lsp-server"
+license:             BSD3
+author:              "Author name here"
+maintainer:          "example@example.com"
+copyright:           "2019 Author name here"
+
+extra-source-files:
+- README.md
+- ChangeLog.md
+
+# Metadata used when publishing your package
+# synopsis:            Short description of your package
+# category:            Web
+
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+description:         Please see the README on GitHub at <https://github.com/githubuser/dhall-lsp-server#readme>
+
+dependencies:
+- base-noprelude >= 4.7 && < 5
+- relude
+- optparse-applicative
+- hslogger
+- haskell-lsp
+- dhall # TODO: this will most likely be resolved to the stackage 1.2.1 version. Do we need to support multiple dhall versions?
+
+default-extensions:
+  - LambdaCase
+  - OverloadedStrings
+  - FlexibleInstances
+  - TypeApplications
+
+library:
+  source-dirs: src
+
+executables:
+  dhall-lsp-server:
+    main:                Main.hs
+    source-dirs:         app
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - dhall-lsp-server
+
+tests:
+  dhall-lsp-server-test:
+    main:                Spec.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - dhall-lsp-server
+    - "tasty"
+    - "tasty-discover"
+    - "tasty-hspec"
+    - "tasty-quickcheck"
