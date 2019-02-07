@@ -1,6 +1,14 @@
 module Main where
 
-import Lib
+
 
 main :: IO ()
-main = someFunc
+main = exitWith undefined 
+
+
+run :: IO Int
+run = undefined
+
+
+
+

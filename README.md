@@ -10,8 +10,9 @@ This is a [Language Server Protocol](https://microsoft.github.io/language-server
 
 * Sort out License
 * Trace/Debug output
-* syntax highlight (in Visual Studio Code)
 * validation errors
+* syntax highlight (in Visual Studio Code)
+* multiple dhall versions
 * goto definition
 * doc on hover
 * file/workspace symbols
