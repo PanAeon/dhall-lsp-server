@@ -26,12 +26,15 @@ dependencies:
 - hslogger
 - haskell-lsp
 - dhall # TODO: this will most likely be resolved to the stackage 1.2.1 version. Do we need to support multiple dhall versions?
+- transformers # ! needed for compiler
+- lens-family-core # ! needed for compiler
 
 default-extensions:
   - LambdaCase
   - OverloadedStrings
   - FlexibleInstances
   - TypeApplications
+  - RecordWildCards
 
 library:
   source-dirs: src
