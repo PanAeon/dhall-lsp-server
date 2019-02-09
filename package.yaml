@@ -26,8 +26,11 @@ dependencies:
 - hslogger
 - haskell-lsp
 - dhall # TODO: this will most likely be resolved to the stackage 1.2.1 version. Do we need to support multiple dhall versions?
-- transformers # ! needed for compiler
-- lens-family-core # ! needed for compiler
+- transformers 
+- lens-family-core
+- text
+- megaparsec # TODO: now used just to pretty print parse error !
+- containers
 
 default-extensions:
   - LambdaCase
