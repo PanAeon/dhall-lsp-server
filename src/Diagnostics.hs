@@ -1,6 +1,5 @@
 {-# LANGUAGE RankNTypes            #-}
-{-# LANGUAGE BangPatterns          #-}
-module Diagnostics where
+module Diagnostics(compilerDiagnostics) where
 
 
 {-|
@@ -46,23 +45,24 @@ exampleDoc = "{ foo = 1"
 defaultDiagnosticSource :: DiagnosticSource
 defaultDiagnosticSource = "dhall-lsp-server"
 
+-- FIXME: type errors span across whitespace after the expression
 -- * TODO: `imported` errors must be handled either as a file error, or much better at import location
-compilerDiagnostics :: FilePath -> Text -> IO [Diagnostic]
+compilerDiagnostics :: Text -> Text -> IO [Diagnostic]
 compilerDiagnostics filePath txt = handle ast
   where
+    bufferName = T.unpack $ last $ fromList $ T.split (=='/') filePath
     settings =  ( set rootDirectory "." 
-                . set sourceName "<buffer_name>") defaultInputSettings
-    ast = const [] <$> inputExprWithSettings  settings txt
+                . set sourceName bufferName) defaultInputSettings
+    ast =  [] <$ inputExprWithSettings  settings txt
     handle =   Control.Exception.handle allErrors
-            --  . Control.Exception.handle parseErrors
-            --  . Control.Exception.handle importErrors
+             . Control.Exception.handle parseErrors
+             . Control.Exception.handle importErrors
              . Control.Exception.handle moduleErrors
              
     
-    allErrors e = do
+    allErrors e = do -- FIXME: somehow imported doesn't work now!
       let _ = e :: SomeException
           numLines = length $ T.lines txt
-      System.IO.hPrint System.IO.stderr e
       pure [Diagnostic {
               _range = Range (Position 0 0) (Position numLines 0)
             , _severity = Just DsError
@@ -74,24 +74,31 @@ compilerDiagnostics filePath txt = handle ast
     parseErrors e = do
         let _ = e :: ParseError
             bundle = unwrap e
-        System.IO.hPrint System.IO.stderr e
+        -- System.IO.hPrint System.IO.stderr e
         pure [Diagnostic {
               _range = Range (Position 0 0) (Position 3 0)
             , _severity = Just DsError
             , _source = Just defaultDiagnosticSource
             , _code = Nothing
-            , _message = "Internal error has occurred: " <> (show e)
+            , _message = "Parse error: " <> (show e)
             , _relatedInformation = Nothing
             }]
-    -- importErrors (Imported ps e) = do
-    --   let _ = e :: TypeError Src X
-    --   System.IO.hPrint System.IO.stderr e
-    --   pure 5
+    importErrors (Imported ps e) = do
+      let _ = e :: TypeError Src X
+      System.IO.hPrint System.IO.stderr (show ps)
+      pure [ Diagnostic {
+               _range = getSourceRange e
+             , _severity = Just DsError
+             , _source = Just defaultDiagnosticSource
+             , _code = Nothing
+             , _message =  ("import error: " <> (show e)) -- FIXME: looks like this is a bit wrong
+             , _relatedInformation = Nothing
+             }]
     moduleErrors e = do
       let _ = e :: TypeError Src X
-          
-      System.IO.hPrint System.IO.stderr e
-      pure [Diagnostic {
+      -- System.IO.hPrint System.IO.stderr txt    
+      -- System.IO.hPrint System.IO.stderr e
+      pure [ Diagnostic {
         _range = getSourceRange e
       , _severity = Just DsError
       , _source = Just defaultDiagnosticSource
@@ -103,8 +110,8 @@ compilerDiagnostics filePath txt = handle ast
 getSourceRange :: TypeError Src X -> Range
 getSourceRange (TypeError ctx expr msg) =  case expr of
                 Dhall.Core.Note (Src (Text.Megaparsec.SourcePos _ bl bc) (Text.Megaparsec.SourcePos _ el ec) _) _ -> 
-                  Range (Position (unPos bl) (unPos bc)) (Position (unPos el) (unPos ec))
-                _        -> trace  "expected note" $ Range (Position 0 0) (Position (negate 1) 0) -- FIXME: default case 
+                  Range (Position (unPos bl - 1) (unPos bc - 1)) (Position (unPos el - 1) (unPos ec - 1))
+                _        -> error  "expected note" -- $ Range (Position 0 0) (Position (negate 1) 0) -- FIXME: default case 
   where
     unPos = Text.Megaparsec.unPos
 -- Megaparsec utils:

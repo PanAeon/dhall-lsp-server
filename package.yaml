@@ -31,6 +31,13 @@ dependencies:
 - text
 - megaparsec # TODO: now used just to pretty print parse error !
 - containers
+- stm
+- lens
+- mtl
+- aeson
+- data-default
+- unordered-containers
+- yi-rope
 
 default-extensions:
   - LambdaCase
@@ -47,9 +54,9 @@ executables:
     main:                Main.hs
     source-dirs:         app
     ghc-options:
-    - -threaded
+   # - -threaded
     - -rtsopts
-    - -with-rtsopts=-N
+    # - -with-rtsopts=-N
     dependencies:
     - dhall-lsp-server
 
