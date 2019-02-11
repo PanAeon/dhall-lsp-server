@@ -15,7 +15,12 @@ import qualified System.Exit
 import qualified System.IO
 import Lens.Family (LensLike', set, view)
 import Dhall.TypeCheck (DetailedTypeError(..), TypeError(..), X)
-import Dhall.Import(Imported(..))
+
+import Dhall.Binary(DecodingFailure(..))
+import Dhall.Import(Imported(..), Cycle(..), ReferentiallyOpaque(..),
+                     MissingFile, MissingEnvironmentVariable, MissingImports )
+
+
 import qualified Data.Text as T
 
 
@@ -23,6 +28,8 @@ import qualified Text.Megaparsec
 import qualified Text.Megaparsec.Error
 import Text.Show(ShowS)
 import qualified Data.Set
+
+import DhallErrors(simpleTypeMessage)
 
 import Language.Haskell.LSP.Types(
       Diagnostic(..)
@@ -47,6 +54,10 @@ defaultDiagnosticSource = "dhall-lsp-server"
 
 -- FIXME: type errors span across whitespace after the expression
 -- * TODO: `imported` errors must be handled either as a file error, or much better at import location
+--  Dhall.Binary.DecodingFailure
+--  Dhall.Import(Cycle, ReferentiallyOpaque, MissingFile, MissingEnvironmentVariable, MissingImports,
+--   HashMismatch, CannotImportHTTPURL)
+
 compilerDiagnostics :: Text -> Text -> IO [Diagnostic]
 compilerDiagnostics filePath txt = handle ast
   where
@@ -55,6 +66,7 @@ compilerDiagnostics filePath txt = handle ast
                 . set sourceName bufferName) defaultInputSettings
     ast =  [] <$ inputExprWithSettings  settings txt
     handle =   Control.Exception.handle allErrors
+             . Control.Exception.handle decodingFailure
              . Control.Exception.handle parseErrors
              . Control.Exception.handle importErrors
              . Control.Exception.handle moduleErrors
@@ -71,6 +83,16 @@ compilerDiagnostics filePath txt = handle ast
             , _message = "Internal error has occurred: " <> (show e)
             , _relatedInformation = Nothing
             }]
+    decodingFailure e = do
+      let (CBORIsNotDhall term) = e
+      pure [Diagnostic {
+        _range = Range (Position 0 0) (Position 1 0)
+      , _severity = Just DsError
+      , _source = Just defaultDiagnosticSource
+      , _code = Nothing
+      , _message = "Cannot decode CBOR to Dhall " <> (show term)
+      , _relatedInformation = Nothing
+      }]
     parseErrors e = do
         let _ = e :: ParseError
             bundle = unwrap e
@@ -96,6 +118,7 @@ compilerDiagnostics filePath txt = handle ast
              }]
     moduleErrors e = do
       let _ = e :: TypeError Src X
+          (TypeError ctx expr msg) = e
       -- System.IO.hPrint System.IO.stderr txt    
       -- System.IO.hPrint System.IO.stderr e
       pure [ Diagnostic {
@@ -103,7 +126,7 @@ compilerDiagnostics filePath txt = handle ast
       , _severity = Just DsError
       , _source = Just defaultDiagnosticSource
       , _code = Nothing
-      , _message =  (show e) -- FIXME: looks like this is a bit wrong
+      , _message =  (simpleTypeMessage msg) -- FIXME: looks like this is a bit wrong
       , _relatedInformation = Nothing
       }] 
 

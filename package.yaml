@@ -30,6 +30,7 @@ dependencies:
 - lens-family-core
 - text
 - megaparsec # TODO: now used just to pretty print parse error !
+- prettyprinter
 - containers
 - stm
 - lens
@@ -38,6 +39,7 @@ dependencies:
 - data-default
 - unordered-containers
 - yi-rope
+
 
 default-extensions:
   - LambdaCase
