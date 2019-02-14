@@ -1,4 +1,5 @@
 {-# LANGUAGE RankNTypes            #-}
+{-# LANGUAGE BangPatterns            #-}
 module Diagnostics(compilerDiagnostics) where
 
 
@@ -67,6 +68,7 @@ compilerDiagnostics filePath txt = handle ast
     ast =  [] <$ inputExprWithSettings  settings txt
     handle =   Control.Exception.handle allErrors
              . Control.Exception.handle decodingFailure
+             . handleImportErrors
              . Control.Exception.handle parseErrors
              . Control.Exception.handle importErrors
              . Control.Exception.handle moduleErrors
@@ -95,16 +97,9 @@ compilerDiagnostics filePath txt = handle ast
       }]
     parseErrors e = do
         let _ = e :: ParseError
-            bundle = unwrap e
-        -- System.IO.hPrint System.IO.stderr e
-        pure [Diagnostic {
-              _range = Range (Position 0 0) (Position 3 0)
-            , _severity = Just DsError
-            , _source = Just defaultDiagnosticSource
-            , _code = Nothing
-            , _message = "Parse error: " <> (show e)
-            , _relatedInformation = Nothing
-            }]
+            errors = errorBundleToDiagnostics $ unwrap e
+        System.IO.hPrint System.IO.stderr errors
+        pure $ errors
     importErrors (Imported ps e) = do
       let _ = e :: TypeError Src X
       System.IO.hPrint System.IO.stderr (show ps)
@@ -129,6 +124,32 @@ compilerDiagnostics filePath txt = handle ast
       , _message =  (simpleTypeMessage msg) -- FIXME: looks like this is a bit wrong
       , _relatedInformation = Nothing
       }] 
+
+-- ! FIXME: provide import errors source position
+-- * Import Errors provide no source pos info, except import mode and ImportType (which contains actual url)
+handleImportErrors :: IO [Diagnostic] -> IO [Diagnostic]
+handleImportErrors =   Control.Exception.handle (importHandler @Cycle)
+                     . Control.Exception.handle (importHandler @ReferentiallyOpaque)
+                     . Control.Exception.handle (importHandler @MissingFile)
+                     . Control.Exception.handle (importHandler @MissingEnvironmentVariable)
+                     . Control.Exception.handle (importHandler @MissingImports)
+                     
+  where
+    importHandler:: forall e a. Exception e => (e -> IO [Diagnostic])
+    importHandler e =
+      pure [Diagnostic {
+        _range = Range (Position 0 0) (Position 1 0)
+      , _severity = Just DsError
+      , _source = Just defaultDiagnosticSource
+      , _code = Nothing
+      , _message = removeAsciiColors $ show e
+      , _relatedInformation = Nothing
+      }]
+    
+removeAsciiColors :: Text -> Text
+removeAsciiColors = T.replace "\ESC[1;31m" "" . T.replace "\ESC[0m" ""
+--  Dhall.Import(Cycle, ReferentiallyOpaque, MissingFile, MissingEnvironmentVariable, MissingImports,
+--   HashMismatch, CannotImportHTTPURL)
 
 getSourceRange :: TypeError Src X -> Range
 getSourceRange (TypeError ctx expr msg) =  case expr of
@@ -158,7 +179,55 @@ errorBundleTextPretty
   -> String               -- ^ Textual rendition of the bundle
 errorBundleTextPretty Text.Megaparsec.Error.ParseErrorBundle {..} = undefined
    
+errorBundleToDiagnostics
+  :: forall s e. ( Text.Megaparsec.Stream s
+  , Text.Megaparsec.Error.ShowErrorComponent e
+  )
+  => Text.Megaparsec.ParseErrorBundle s e
+  -> [Diagnostic]
+errorBundleToDiagnostics  Text.Megaparsec.Error.ParseErrorBundle {..}  = 
+    fst $ foldl' f ([], bundlePosState) bundleErrors
+  where
+    f :: forall s e. ( Text.Megaparsec.Stream s, Text.Megaparsec.Error.ShowErrorComponent e)
+      => ([Diagnostic], Text.Megaparsec.PosState s)
+      -> Text.Megaparsec.ParseError s e
+      -> ([Diagnostic], Text.Megaparsec.PosState s)  
+    f (r, !pst) e = (diagnostics:r, pst')
+      where
+        (epos, line, pst') = Text.Megaparsec.reachOffset (Text.Megaparsec.errorOffset e) pst
+        errorText = Text.Megaparsec.Error.parseErrorTextPretty e
+        lineNumber = (Text.Megaparsec.unPos . Text.Megaparsec.sourceLine) epos - 1
+        startColumn = Text.Megaparsec.unPos (Text.Megaparsec.sourceColumn epos) - 1
+        diagnostics = Diagnostic {
+            _range = Range (Position lineNumber startColumn) (Position lineNumber endColumn)
+          , _severity = Just DsError
+          , _source = Just defaultDiagnosticSource
+          , _code = Nothing
+          , _message = T.pack errorText
+          , _relatedInformation = Nothing
+          }
+        
+        endColumn = startColumn + errorLength
+         
+        lineLength = length line
+        errorLength =
+          case e of
+            Text.Megaparsec.TrivialError _ Nothing _ -> 1
+            Text.Megaparsec.TrivialError _ (Just x) _ -> errorItemLength x
+            Text.Megaparsec.FancyError _ xs ->
+              Data.Set.foldl' (\a b -> max a (errorFancyLength b)) 1 xs
 
+-- | Get length of the “pointer” to display under a given 'ErrorItem'.
+
+errorItemLength :: Text.Megaparsec.ErrorItem t -> Int
+errorItemLength = \case
+  Text.Megaparsec.Tokens ts -> length ts
+  _         -> 1
+
+errorFancyLength :: Text.Megaparsec.ShowErrorComponent e => Text.Megaparsec.ErrorFancy e -> Int  
+errorFancyLength = \case
+  Text.Megaparsec.ErrorCustom a -> Text.Megaparsec.errorComponentLen a
+  _             -> 1
 -- errorBundlePretty
 --   :: forall s e. ( Text.Megaparsec.Stream s
 --                  , Text.Megaparsec.Error.ShowErrorComponent e
