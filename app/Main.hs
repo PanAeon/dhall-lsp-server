@@ -33,13 +33,61 @@ import qualified Diagnostics
 import qualified Data.Text.IO
 import qualified System.IO
 import qualified Data.Map as Map
+import Options.Applicative (Parser, ParserInfo)
+import qualified Options.Applicative
+
+import qualified System.IO.Unsafe
+
+data Options = Options {
+  command :: Command
+}
+
+data Command = CmdVersion | Default 
+
+parseOptions :: Parser Options
+parseOptions = Options <$> parseMode
 
 
-main :: IO ()
-main = do
-  run (return ()) >>= \case
+subcommand :: String -> String -> Parser a -> Parser a
+subcommand name description parser =
+    Options.Applicative.hsubparser
+        (   Options.Applicative.command name parserInfo
+        <>  Options.Applicative.metavar name
+        )
+  where
+    parserInfo =
+        Options.Applicative.info parser
+            (   Options.Applicative.fullDesc
+            <>  Options.Applicative.progDesc description
+            )
+
+parseMode :: Parser Command
+parseMode =
+        subcommand
+            "version"
+            "Display version"
+            (pure CmdVersion)
+    <|> pure Default
+  
+parserInfoOptions :: ParserInfo Options
+parserInfoOptions =
+    Options.Applicative.info
+        (Options.Applicative.helper <*> parseOptions)
+        (   Options.Applicative.progDesc "Interpreter for the Dhall language"
+        <>  Options.Applicative.fullDesc
+        )
+        
+runCommand :: Options -> IO ()
+runCommand Options{..} = case command of
+  CmdVersion -> putStrLn "0.0.1-SNAPSHOT"
+  Default    ->  
+   run (pure ()) >>= \case
     0 -> exitSuccess
     c -> exitWith . System.Exit.ExitFailure $ c
+
+main :: IO ()
+main = Options.Applicative.execParser parserInfoOptions >>= runCommand
+  
 
 -- ---------------------------------------------------------------------
 
@@ -96,14 +144,22 @@ reactorSend msg = do
   liftIO $ Core.sendFunc lf msg
 
 -- ---------------------------------------------------------------------
+myGlobalVar :: IORef Int
+{-# NOINLINE myGlobalVar #-}
+myGlobalVar = System.IO.Unsafe.unsafePerformIO (newIORef 17)
+
 -- ! NOW This will flush all diagnostics, not only for the current file!
 -- ! SO it's version mismatch..?
 publishDiagnostics :: Int -> J.Uri -> J.TextDocumentVersion -> DiagnosticsBySource -> R () ()
 publishDiagnostics maxToPublish uri v diags = do
   lf <- ask
-  if Map.null diags
-    then liftIO $ (Core.flushDiagnosticsBySourceFunc lf) maxToPublish (Just ("dhall-lsp-server"))
-    else liftIO $ (Core.publishDiagnosticsFunc lf) maxToPublish uri v diags
+  v' <- readIORef myGlobalVar
+  writeIORef myGlobalVar (v'+1)
+  liftIO $ (Core.publishDiagnosticsFunc lf) maxToPublish uri (Just v') diags
+  -- if Map.null diags
+  --   then liftIO $ (Core.flushDiagnosticsBySourceFunc lf) maxToPublish (Just ("dhall-lsp-server"))
+  --   else liftIO $ (Core.publishDiagnosticsFunc lf) maxToPublish uri v diags
+  
 
 -- ---------------------------------------------------------------------
 
@@ -155,7 +211,7 @@ reactor lf inp = do
          }
         -}
         let
-          registration = J.Registration "lsp-hello-registered" J.WorkspaceExecuteCommand Nothing
+          registration = J.Registration "dhall-lsp-server-registered" J.WorkspaceExecuteCommand Nothing
         let registrations = J.RegistrationParams (J.List [registration])
         rid <- nextLspReqId
 
@@ -177,25 +233,28 @@ reactor lf inp = do
             doc  = notification ^. J.params
                                  . J.textDocument
                                  . J.uri
+            v    = notification ^. J.params
+                                 . J.textDocument 
+                                 . J.version
             fileName =  J.uriToFilePath doc
         liftIO $ U.logs $ "********* fileName=" ++ show fileName
-        sendDiagnostics doc (Just 0) 
+        sendDiagnostics doc (Just v)
 
       -- -------------------------------
 
-      HandlerRequest (NotDidChangeTextDocument notification) -> do
-        let doc :: J.Uri
-            doc  = notification ^. J.params
-                                 . J.textDocument
-                                 . J.uri
-        mdoc <- liftIO $ Core.getVirtualFileFunc lf doc
-        case mdoc of
-          Just (VirtualFile _version str) -> do
-            liftIO $ U.logs $ "reactor:processing NotDidChangeTextDocument: vf got:" ++ (show $ Yi.toString str)
-          Nothing -> do
-            liftIO $ U.logs "reactor:processing NotDidChangeTextDocument: vf returned Nothing"
+      -- HandlerRequest (NotDidChangeTextDocument notification) -> do
+      --   let doc :: J.Uri
+      --       doc  = notification ^. J.params
+      --                            . J.textDocument
+      --                            . J.uri
+      --   mdoc <- liftIO $ Core.getVirtualFileFunc lf doc
+      --   case mdoc of
+      --     Just (VirtualFile _version str) -> 
+      --       liftIO $ U.logs $ "reactor:processing NotDidChangeTextDocument: vf got:" ++ (show $ Yi.toString str)
+      --     Nothing -> 
+      --       liftIO $ U.logs "reactor:processing NotDidChangeTextDocument: vf returned Nothing"
 
-        liftIO $ U.logs $ "reactor:processing NotDidChangeTextDocument: uri=" ++ (show doc)
+      --   liftIO $ U.logs $ "reactor:processing NotDidChangeTextDocument: uri=" ++ (show doc)
 
       -- -------------------------------
 
@@ -227,44 +286,44 @@ reactor lf inp = do
 
       -- -------------------------------
 
-      HandlerRequest (ReqHover req) -> do
-        liftIO $ U.logs $ "reactor:got HoverRequest:" ++ show req
-        let J.TextDocumentPositionParams _doc pos = req ^. J.params
-            J.Position _l _c' = pos
+      -- HandlerRequest (ReqHover req) -> do
+      --   liftIO $ U.logs $ "reactor:got HoverRequest:" ++ show req
+      --   let J.TextDocumentPositionParams _doc pos = req ^. J.params
+      --       J.Position _l _c' = pos
 
-        let
-          ht = Just $ J.Hover ms (Just range)
-          ms = J.List [J.CodeString $ J.LanguageString "lsp-hello" "TYPE INFO" ]
-          range = J.Range pos pos
-        reactorSend $ RspHover $ Core.makeResponseMessage req ht
+      --   let
+      --     ht = Just $ J.Hover ms (Just range)
+      --     ms = J.List [J.CodeString $ J.LanguageString "lsp-hello" "TYPE INFO" ]
+      --     range = J.Range pos pos
+      --   reactorSend $ RspHover $ Core.makeResponseMessage req ht
 
       -- -------------------------------
 
-      HandlerRequest (ReqCodeAction req) -> do
-        liftIO $ U.logs $ "reactor:got CodeActionRequest:" ++ show req
-        let params = req ^. J.params
-            doc = params ^. J.textDocument
-            -- fileName = drop (length ("file://"::String)) doc
-            -- J.Range from to = J._range (params :: J.CodeActionParams)
-            (J.List diags) = params ^. J.context . J.diagnostics
+      -- HandlerRequest (ReqCodeAction req) -> do
+      --   liftIO $ U.logs $ "reactor:got CodeActionRequest:" ++ show req
+      --   let params = req ^. J.params
+      --       doc = params ^. J.textDocument
+      --       -- fileName = drop (length ("file://"::String)) doc
+      --       -- J.Range from to = J._range (params :: J.CodeActionParams)
+      --       (J.List diags) = params ^. J.context . J.diagnostics
 
-        let
-          -- makeCommand only generates commands for diagnostics whose source is us
-          makeCommand (J.Diagnostic (J.Range start _) _s _c (Just "lsp-hello") _m _l) = [J.Command title cmd cmdparams]
-            where
-              title = "Apply LSP hello command:" <> (head $ fromList (T.lines _m))
-              -- NOTE: the cmd needs to be registered via the InitializeResponse message. See lspOptions above
-              cmd = "lsp-hello-command"
-              -- need 'file' and 'start_pos'
-              args = J.List
-                      [ J.Object $ H.fromList [("file",     J.Object $ H.fromList [("textDocument",J.toJSON doc)])]
-                      , J.Object $ H.fromList [("start_pos",J.Object $ H.fromList [("position",    J.toJSON start)])]
-                      ]
-              cmdparams = Just args
-          makeCommand (J.Diagnostic _r _s _c _source _m _l) = []
-        let body = J.List $ map J.CACommand $ concatMap makeCommand diags
-            rsp = Core.makeResponseMessage req body
-        reactorSend $ RspCodeAction rsp
+      --   let
+      --     -- makeCommand only generates commands for diagnostics whose source is us
+      --     makeCommand (J.Diagnostic (J.Range start _) _s _c (Just "lsp-hello") _m _l) = [J.Command title cmd cmdparams]
+      --       where
+      --         title = "Apply LSP hello command:" <> (head $ fromList (T.lines _m))
+      --         -- NOTE: the cmd needs to be registered via the InitializeResponse message. See lspOptions above
+      --         cmd = "lsp-hello-command"
+      --         -- need 'file' and 'start_pos'
+      --         args = J.List
+      --                 [ J.Object $ H.fromList [("file",     J.Object $ H.fromList [("textDocument",J.toJSON doc)])]
+      --                 , J.Object $ H.fromList [("start_pos",J.Object $ H.fromList [("position",    J.toJSON start)])]
+      --                 ]
+      --         cmdparams = Just args
+      --     makeCommand (J.Diagnostic _r _s _c _source _m _l) = []
+      --   let body = J.List $ map J.CACommand $ concatMap makeCommand diags
+      --       rsp = Core.makeResponseMessage req body
+      --   reactorSend $ RspCodeAction rsp
 
       -- -------------------------------
 
@@ -291,9 +350,17 @@ reactor lf inp = do
             reply (J.Object mempty)
 
       -- -------------------------------
-
+      HandlerRequest (NotDidCloseTextDocument req) -> do
+        liftIO $ U.logm "****** reactor: processing NotDidCloseTextDocument"
+        let
+            doc  = req ^. J.params
+                                 . J.textDocument
+                                 . J.uri
+            fileName = J.uriToFilePath doc
+        liftIO $ U.logs $ "********* fileName=" ++ show fileName
+        sendEmptyDiagnostics doc Nothing
       HandlerRequest om -> do
-        liftIO $ U.logs $ "reactor:got HandlerRequest:" ++ show om
+        liftIO $ U.logs $ "\nIGNORING!!!\n HandlerRequest:" ++ show om
 
 -- ---------------------------------------------------------------------
 
@@ -301,6 +368,10 @@ toWorkspaceEdit :: t -> Maybe J.ApplyWorkspaceEditParams
 toWorkspaceEdit _ = Nothing
 
 -- ---------------------------------------------------------------------
+-- Y no method to flush particular source errors?
+sendEmptyDiagnostics ::  J.Uri -> Maybe Int -> R () ()
+sendEmptyDiagnostics fileUri version = 
+  publishDiagnostics 10 fileUri version (partitionBySource [])
 
 -- | Analyze the file and send any diagnostics to the client in a
 -- "textDocument/publishDiagnostics" notification
@@ -310,9 +381,9 @@ sendDiagnostics fileUri version = do
    filePath = maybe (error "can't convert uri to file path") id $ J.uriToFilePath fileUri
   txt <- lift $ Data.Text.IO.readFile filePath
   -- pure $ System.IO.hPrint System.IO.stderr txt
-  diags' <- lift $ Diagnostics.compilerDiagnostics (J.getUri fileUri) txt
+  diags' <- lift $ Diagnostics.compilerDiagnostics filePath (J.getUri fileUri) txt 
   lift $ U.logs $ "diagnostic: " <> show diags'
-  publishDiagnostics 100 fileUri version (partitionBySource diags')
+  publishDiagnostics 10 fileUri version (partitionBySource diags')
   -- let  
   --   diags = [J.Diagnostic
   --             (J.Range (J.Position 0 1) (J.Position 0 5))
@@ -331,7 +402,7 @@ sendDiagnostics fileUri version = do
 syncOptions :: J.TextDocumentSyncOptions
 syncOptions = J.TextDocumentSyncOptions
   { J._openClose         = Just True
-  , J._change            = Just J.TdSyncIncremental
+  , J._change            = Just J.TdSyncNone--J.TdSyncIncremental
   , J._willSave          = Just False
   , J._willSaveWaitUntil = Just False
   , J._save              = Just $ J.SaveOptions $ Just False

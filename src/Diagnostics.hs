@@ -29,6 +29,7 @@ import qualified Text.Megaparsec
 import qualified Text.Megaparsec.Error
 import Text.Show(ShowS)
 import qualified Data.Set
+import qualified System.FilePath
 
 import DhallErrors(simpleTypeMessage)
 
@@ -58,12 +59,14 @@ defaultDiagnosticSource = "dhall-lsp-server"
 --  Dhall.Binary.DecodingFailure
 --  Dhall.Import(Cycle, ReferentiallyOpaque, MissingFile, MissingEnvironmentVariable, MissingImports,
 --   HashMismatch, CannotImportHTTPURL)
-
-compilerDiagnostics :: Text -> Text -> IO [Diagnostic]
-compilerDiagnostics filePath txt = handle ast
+-- TODO: don't show annoying error when file is empty
+compilerDiagnostics :: FilePath -> Text -> Text -> IO [Diagnostic]
+compilerDiagnostics path filePath txt = handle ast
   where
-    bufferName = T.unpack $ last $ fromList $ T.split (=='/') filePath
-    settings =  ( set rootDirectory "." 
+    -- bufferName = T.unpack $ last $ fromList $ T.split (=='/') filePath
+    -- rootDir    = T.unpack $ T.intercalate "/" $ tail $ fromList $ T.split (=='/') filePath
+    (rootDir, bufferName) = System.FilePath.splitFileName path
+    settings =  ( set rootDirectory rootDir
                 . set sourceName bufferName) defaultInputSettings
     ast =  [] <$ inputExprWithSettings  settings txt
     handle =   Control.Exception.handle allErrors
@@ -102,9 +105,10 @@ compilerDiagnostics filePath txt = handle ast
         pure $ errors
     importErrors (Imported ps e) = do
       let _ = e :: TypeError Src X
+          numLines = length $ T.lines txt
       System.IO.hPrint System.IO.stderr (show ps)
       pure [ Diagnostic {
-               _range = getSourceRange e
+               _range = Range (Position 0 0) (Position numLines 0) -- getSourceRange e
              , _severity = Just DsError
              , _source = Just defaultDiagnosticSource
              , _code = Nothing
