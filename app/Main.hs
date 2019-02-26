@@ -39,13 +39,20 @@ import qualified Options.Applicative
 import qualified System.IO.Unsafe
 
 data Options = Options {
-  command :: Command
+    command :: Command
+  , logFile :: Maybe String -- file where the server process debug log should be written
 }
 
 data Command = CmdVersion | Default 
 
 parseOptions :: Parser Options
 parseOptions = Options <$> parseMode
+                       <*> Options.Applicative.optional parseLogFile
+    where
+      parseLogFile = Options.Applicative.strOption 
+                       (  
+                          Options.Applicative.long "log"  
+                       <> Options.Applicative.help "If present writes debug output to the specified file")
 
 
 subcommand :: String -> String -> Parser a -> Parser a
@@ -81,7 +88,7 @@ runCommand :: Options -> IO ()
 runCommand Options{..} = case command of
   CmdVersion -> putStrLn "0.0.1-SNAPSHOT"
   Default    ->  
-   run (pure ()) >>= \case
+   run logFile (pure ()) >>= \case
     0 -> exitSuccess
     c -> exitWith . System.Exit.ExitFailure $ c
 
@@ -91,46 +98,50 @@ main = Options.Applicative.execParser parserInfoOptions >>= runCommand
 
 -- ---------------------------------------------------------------------
 
-run :: IO () -> IO Int
-run dispatcherProc = flip E.catches handlers $ do
+run :: Maybe String -> IO () -> IO Int
+run maybeLog dispatcherProc = flip E.catches handlers $ do
 
-  rin  <- atomically newTChan :: IO (TChan ReactorInput)
+  rin  <- atomically newTChan :: IO (TChan FromClientMessage)
 
   let
     dp lf = do
-      liftIO $ U.logs "main.run:dp entered"
       _rpid  <- forkIO $ reactor lf rin
-      liftIO $ U.logs "main.run:dp tchan"
       dispatcherProc
-      liftIO $ U.logs "main.run:dp after dispatcherProc"
-      return Nothing
+      pure Nothing
 
   flip E.finally finalProc $ do
-    Core.setupLogger (Just "/tmp/lsp-hello.log") [] L.DEBUG
-    CTRL.run (return (Right ()), dp) (lspHandlers rin) lspOptions (Just "/tmp/lsp-hello-session.log")
+    setupLogger maybeLog
+    CTRL.run (pure (Right ()), dp) (lspHandlers rin) lspOptions Nothing
+    -- TODO: CTRL.run takes logger as the last option, and should write LSP log into it
+    -- TODO: 1. make upstream logger write in the format which lsp-inspector can read
+    -- TODO: 2. it would be cool, if we start writing log on file creation, e.g.
+    -- TODO:    e.g. "touch file /var/log/dhall-lsp-server/log-2018-03-12-12-45-34-fe5dk3.log to enable LSP logging"
 
   where
     handlers = [ E.Handler ioExcept
                , E.Handler someExcept
                ]
     finalProc = L.removeAllHandlers
-    ioExcept   (e :: E.IOException)       = error $ show $ e -- print e >> return 1
-    someExcept (e :: E.SomeException)     = error $ show $ e -- print e >> return 1
+    ioExcept   (e :: E.IOException)       = error $ show $ e -- print e >> pure 1
+    someExcept (e :: E.SomeException)     = error $ show $ e -- print e >> pure 1
 
 -- ---------------------------------------------------------------------
 
--- The reactor is a process that serialises and buffers all requests from the
--- LSP client, so they can be sent to the backend compiler one at a time, and a
--- reply sent.
+-- TODO: ADD verbosity
+-- | sets the output logger.
+-- | if no filename is provided then logger is disabled, if input is string `[OUTPUT]` then log goes to stderr,
+-- | which then redirects inside VSCode to the output pane of the plugin.
 
-data ReactorInput
-  = HandlerRequest FromClientMessage
-      -- ^ injected into the reactor input by each of the individual callback handlers
+setupLogger :: Maybe FilePath -> IO ()
+setupLogger Nothing          = pure ()
+setupLogger (Just "[OUTPUT]") = Core.setupLogger Nothing [] L.DEBUG 
+setupLogger file              = Core.setupLogger file [] L.DEBUG
+
 
 -- ---------------------------------------------------------------------
 
 -- | The monad used in the reactor
-type R c a = ReaderT (Core.LspFuncs c) IO a
+-- type R c a = ReaderT (Core.LspFuncs c) IO a
 
 -- ---------------------------------------------------------------------
 -- reactor monad functions
@@ -138,42 +149,42 @@ type R c a = ReaderT (Core.LspFuncs c) IO a
 
 -- ---------------------------------------------------------------------
 
-reactorSend :: FromServerMessage -> R () ()
+reactorSend :: FromServerMessage -> ReaderT (Core.LspFuncs ()) IO ()
 reactorSend msg = do
   lf <- ask
   liftIO $ Core.sendFunc lf msg
 
 -- ---------------------------------------------------------------------
+
+-- FIXME: why it doesn't send the correct version?
 myGlobalVar :: IORef Int
 {-# NOINLINE myGlobalVar #-}
-myGlobalVar = System.IO.Unsafe.unsafePerformIO (newIORef 17)
+myGlobalVar = System.IO.Unsafe.unsafePerformIO (newIORef 0)
 
--- ! NOW This will flush all diagnostics, not only for the current file!
--- ! SO it's version mismatch..?
-publishDiagnostics :: Int -> J.Uri -> J.TextDocumentVersion -> DiagnosticsBySource -> R () ()
+--  flushDiagnostics will flush all diagnostics, not only for the current file!
+-- TODO: SO it's version mismatch... Keep version of the open files
+publishDiagnostics :: Int -> J.Uri -> J.TextDocumentVersion -> DiagnosticsBySource -> ReaderT (Core.LspFuncs ()) IO ()
 publishDiagnostics maxToPublish uri v diags = do
   lf <- ask
   v' <- readIORef myGlobalVar
   writeIORef myGlobalVar (v'+1)
-  liftIO $ (Core.publishDiagnosticsFunc lf) maxToPublish uri (Just v') diags
+  liftIO $ (Core.publishDiagnosticsFunc lf) maxToPublish uri (Just v') diags -- ! looks like a bug upstream 
   -- if Map.null diags
   --   then liftIO $ (Core.flushDiagnosticsBySourceFunc lf) maxToPublish (Just ("dhall-lsp-server"))
   --   else liftIO $ (Core.publishDiagnosticsFunc lf) maxToPublish uri v diags
-  
+  --Core.flushDiagnosticsBySourceFunc LspFuncs c Int Maybe DiagnosticSource
 
 -- ---------------------------------------------------------------------
 
-nextLspReqId :: R () J.LspId
-nextLspReqId = do
-  f <- asks Core.getNextReqId
-  liftIO f
+nextLspReqId :: ReaderT (Core.LspFuncs ()) IO J.LspId
+nextLspReqId = asks Core.getNextReqId >>= liftIO
 
 -- ---------------------------------------------------------------------
 
 -- | The single point that all events flow through, allowing management of state
 -- to stitch replies and requests together from the two asynchronous sides: lsp
 -- server and backend compiler
-reactor :: Core.LspFuncs () -> TChan ReactorInput -> IO ()
+reactor :: Core.LspFuncs () -> TChan FromClientMessage -> IO ()
 reactor lf inp = do
   liftIO $ U.logs "reactor:entered"
   flip runReaderT lf $ forever $ do
@@ -182,12 +193,12 @@ reactor lf inp = do
 
       -- Handle any response from a message originating at the server, such as
       -- "workspace/applyEdit"
-      HandlerRequest (RspFromClient rm) -> do
+       (RspFromClient rm) -> 
         liftIO $ U.logs $ "reactor:got RspFromClient:" ++ show rm
 
       -- -------------------------------
 
-      HandlerRequest (NotInitialized _notification) -> do
+       (NotInitialized _notification) -> do
         liftIO $ U.logm "****** reactor: processing Initialized Notification"
         -- Server is ready, register any specific capabilities we need
 
@@ -228,7 +239,7 @@ reactor lf inp = do
 
       -- -------------------------------
 
-      HandlerRequest (NotDidOpenTextDocument notification) -> do
+       (NotDidOpenTextDocument notification) -> do
         liftIO $ U.logm "****** reactor: processing NotDidOpenTextDocument"
         let
             doc  = notification ^. J.params
@@ -238,12 +249,12 @@ reactor lf inp = do
                                  . J.textDocument 
                                  . J.version
             fileName =  J.uriToFilePath doc
-        liftIO $ U.logs $ "********* fileName=" ++ show fileName
+        liftIO $ U.logs $ "********* fileName=" <> show fileName <> "version: " <> show v
         sendDiagnostics doc (Just v)
 
       -- -------------------------------
 
-      -- HandlerRequest (NotDidChangeTextDocument notification) -> do
+      --  (NotDidChangeTextDocument notification) -> do
       --   let doc :: J.Uri
       --       doc  = notification ^. J.params
       --                            . J.textDocument
@@ -259,35 +270,36 @@ reactor lf inp = do
 
       -- -------------------------------
 
-      HandlerRequest (NotDidSaveTextDocument notification) -> do
+       (NotDidSaveTextDocument notification) -> do
         liftIO $ U.logm "****** reactor: processing NotDidSaveTextDocument"
         let
             doc  = notification ^. J.params
                                  . J.textDocument
                                  . J.uri
+             
             fileName = J.uriToFilePath doc
         liftIO $ U.logs $ "********* fileName=" ++ show fileName
         sendDiagnostics doc Nothing
 
       -- -------------------------------
 
-      HandlerRequest (ReqRename req) -> do
-        liftIO $ U.logs $ "reactor:got RenameRequest:" ++ show req
-        let
-            _params = req ^. J.params
-            _doc  = _params ^. J.textDocument . J.uri
-            J.Position _l _c' = _params ^. J.position
-            _newName  = _params ^. J.newName
+      --  (ReqRename req) -> do
+      --   liftIO $ U.logs $ "reactor:got RenameRequest:" ++ show req
+      --   let
+      --       _params = req ^. J.params
+      --       _doc  = _params ^. J.textDocument . J.uri
+      --       J.Position _l _c' = _params ^. J.position
+      --       _newName  = _params ^. J.newName
 
-        let we = J.WorkspaceEdit
-                    Nothing -- "changes" field is deprecated
-                    (Just (J.List [])) -- populate with actual changes from the rename
-        let rspMsg = Core.makeResponseMessage req we
-        reactorSend $ RspRename rspMsg
+      --   let we = J.WorkspaceEdit
+      --               Nothing -- "changes" field is deprecated
+      --               (Just (J.List [])) -- populate with actual changes from the rename
+      --   let rspMsg = Core.makeResponseMessage req we
+      --   reactorSend $ RspRename rspMsg
 
       -- -------------------------------
 
-      -- HandlerRequest (ReqHover req) -> do
+      --  (ReqHover req) -> do
       --   liftIO $ U.logs $ "reactor:got HoverRequest:" ++ show req
       --   let J.TextDocumentPositionParams _doc pos = req ^. J.params
       --       J.Position _l _c' = pos
@@ -300,7 +312,7 @@ reactor lf inp = do
 
       -- -------------------------------
 
-      -- HandlerRequest (ReqCodeAction req) -> do
+      --  (ReqCodeAction req) -> do
       --   liftIO $ U.logs $ "reactor:got CodeActionRequest:" ++ show req
       --   let params = req ^. J.params
       --       doc = params ^. J.textDocument
@@ -328,7 +340,7 @@ reactor lf inp = do
 
       -- -------------------------------
 
-      HandlerRequest (ReqExecuteCommand req) -> do
+       (ReqExecuteCommand req) -> do
         liftIO $ U.logs "reactor:got ExecuteCommandRequest:" -- ++ show req
         let params = req ^. J.params
             margs = params ^. J.arguments
@@ -351,7 +363,7 @@ reactor lf inp = do
             reply (J.Object mempty)
 
       -- -------------------------------
-      HandlerRequest (NotDidCloseTextDocument req) -> do
+       (NotDidCloseTextDocument req) -> do
         liftIO $ U.logm "****** reactor: processing NotDidCloseTextDocument"
         let
             doc  = req ^. J.params
@@ -360,7 +372,7 @@ reactor lf inp = do
             fileName = J.uriToFilePath doc
         liftIO $ U.logs $ "********* fileName=" ++ show fileName
         sendEmptyDiagnostics doc Nothing
-      HandlerRequest om -> do
+       om -> do
         liftIO $ U.logs $ "\nIGNORING!!!\n HandlerRequest:" ++ show om
 
 -- ---------------------------------------------------------------------
@@ -368,32 +380,24 @@ reactor lf inp = do
 toWorkspaceEdit :: t -> Maybe J.ApplyWorkspaceEditParams
 toWorkspaceEdit _ = Nothing
 
+-- TODO: max num errors parameter (not rly relevant since we got 1, but still) 
 -- ---------------------------------------------------------------------
 -- Y no method to flush particular source errors?
-sendEmptyDiagnostics ::  J.Uri -> Maybe Int -> R () ()
+sendEmptyDiagnostics ::  J.Uri -> Maybe Int -> ReaderT (Core.LspFuncs ()) IO ()
 sendEmptyDiagnostics fileUri version = 
   publishDiagnostics 10 fileUri version (partitionBySource [])
 
 -- | Analyze the file and send any diagnostics to the client in a
 -- "textDocument/publishDiagnostics" notification
-sendDiagnostics :: J.Uri -> Maybe Int -> R () ()
+sendDiagnostics :: J.Uri -> Maybe Int ->  ReaderT (Core.LspFuncs ()) IO ()
 sendDiagnostics fileUri version = do
   let
-   filePath = maybe (error "can't convert uri to file path") id $ J.uriToFilePath fileUri
+   filePath = maybe (error "can't convert uri to file path") id $ J.uriToFilePath fileUri -- !FIXME: handle non-file uris
   txt <- lift $ Data.Text.IO.readFile filePath
   -- pure $ System.IO.hPrint System.IO.stderr txt
   diags' <- lift $ Diagnostics.compilerDiagnostics filePath (J.getUri fileUri) txt 
   lift $ U.logs $ "diagnostic: " <> show diags'
-  publishDiagnostics 10 fileUri version (partitionBySource diags')
-  -- let  
-  --   diags = [J.Diagnostic
-  --             (J.Range (J.Position 0 1) (J.Position 0 5))
-  --             (Just J.DsWarning)  -- severity
-  --             Nothing  -- code
-  --             (Just "lsp-hello") -- source
-  --             "Example diagnostic message"
-  --             (Just (J.List []))
-  --           ]
+  publishDiagnostics 10 fileUri version (partitionBySource diags')    
     
   -- reactorSend $ J.NotificationMessage "2.0" "textDocument/publishDiagnostics" (Just r)
   -- publishDiagnostics 100 fileUri version (partitionBySource diags)
@@ -409,13 +413,14 @@ syncOptions = J.TextDocumentSyncOptions
   , J._save              = Just $ J.SaveOptions $ Just False
   }
 
+-- Capabilities entry point
 lspOptions :: Core.Options
 lspOptions = def { Core.textDocumentSync = Just syncOptions
                  -- , Core.executeCommandProvider = Just (J.ExecuteCommandOptions (J.List ["lsp-hello-command"]))
-                 , Core.codeLensProvider = Just (J.CodeLensOptions (Just False))
+                 -- , Core.codeLensProvider = Just (J.CodeLensOptions (Just False))
                  }
 
-lspHandlers :: TChan ReactorInput -> Core.Handlers
+lspHandlers :: TChan FromClientMessage -> Core.Handlers
 lspHandlers rin
   = def { Core.initializedHandler                       = Just $ passHandler rin NotInitialized
         -- , Core.renameHandler                            = Just $ passHandler rin ReqRename
@@ -432,14 +437,14 @@ lspHandlers rin
 
 -- ---------------------------------------------------------------------
 
-passHandler :: TChan ReactorInput -> (a -> FromClientMessage) -> Core.Handler a
-passHandler rin c notification = do
-  atomically $ writeTChan rin (HandlerRequest (c notification))
+passHandler :: TChan FromClientMessage -> (a -> FromClientMessage) -> Core.Handler a
+passHandler rin convert notification = 
+  atomically $ writeTChan rin  (convert notification)
 
 -- ---------------------------------------------------------------------
 
-responseHandlerCb :: TChan ReactorInput -> Core.Handler J.BareResponseMessage
-responseHandlerCb _rin resp = do
+responseHandlerCb :: TChan FromClientMessage -> Core.Handler J.BareResponseMessage
+responseHandlerCb _rin resp = 
   U.logs $ "******** got ResponseMessage, ignoring:" ++ show resp
 
 -- ---------------------------------------------------------------------

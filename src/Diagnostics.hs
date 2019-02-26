@@ -59,7 +59,7 @@ defaultDiagnosticSource = "dhall-lsp-server"
 --  Dhall.Binary.DecodingFailure
 --  Dhall.Import(Cycle, ReferentiallyOpaque, MissingFile, MissingEnvironmentVariable, MissingImports,
 --   HashMismatch, CannotImportHTTPURL)
--- TODO: don't show annoying error when file is empty
+-- !FIXME: (aside) VSCode multiselection expand selects first world only
 compilerDiagnostics :: FilePath -> Text -> Text -> IO [Diagnostic]
 compilerDiagnostics path filePath txt = handle ast
   where
@@ -68,10 +68,13 @@ compilerDiagnostics path filePath txt = handle ast
     (rootDir, bufferName) = System.FilePath.splitFileName path
     settings =  ( set rootDirectory rootDir
                 . set sourceName bufferName) defaultInputSettings
-    ast =  [] <$ inputExprWithSettings  settings txt
+    isEmpty = T.null $ T.strip txt -- FIXME: file consisting with only comments shouldn't produce an error? handle upstream?
+    ast =  if isEmpty 
+           then pure []
+           else [] <$ inputExprWithSettings  settings txt
     handle =   Control.Exception.handle allErrors
              . Control.Exception.handle decodingFailure
-             . handleImportErrors
+             . handleImportErrors txt
              . Control.Exception.handle parseErrors
              . Control.Exception.handle importErrors
              . Control.Exception.handle moduleErrors
@@ -131,18 +134,19 @@ compilerDiagnostics path filePath txt = handle ast
 
 -- ! FIXME: provide import errors source position
 -- * Import Errors provide no source pos info, except import mode and ImportType (which contains actual url)
-handleImportErrors :: IO [Diagnostic] -> IO [Diagnostic]
-handleImportErrors =   Control.Exception.handle (importHandler @Cycle)
+handleImportErrors :: Text -> IO [Diagnostic] -> IO [Diagnostic]
+handleImportErrors txt =   Control.Exception.handle (importHandler @Cycle)
                      . Control.Exception.handle (importHandler @ReferentiallyOpaque)
                      . Control.Exception.handle (importHandler @MissingFile)
                      . Control.Exception.handle (importHandler @MissingEnvironmentVariable)
                      . Control.Exception.handle (importHandler @MissingImports)
                      
   where
+    numLines = length $ T.lines txt
     importHandler:: forall e a. Exception e => (e -> IO [Diagnostic])
     importHandler e =
       pure [Diagnostic {
-        _range = Range (Position 0 0) (Position 1 0)
+        _range = Range (Position 0 0) (Position numLines 0)
       , _severity = Just DsError
       , _source = Just defaultDiagnosticSource
       , _code = Nothing

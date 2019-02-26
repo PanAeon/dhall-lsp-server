@@ -22,7 +22,7 @@ If you are using VSCode there's also an option in the [VSCode Dhall plugin](http
 
 ## TODO:
 
-* Trace/Debug output
+* Enable/Disable Trace/Debug output dynamically
 * validation errors
 * multiple dhall versions
 * goto definition
@@ -31,11 +31,7 @@ If you are using VSCode there's also an option in the [VSCode Dhall plugin](http
 * lint
 * file/workspace symbols
 * rename
-
-## Working with Markdown
-
-**Note:** You can author your README using Visual Studio Code.  Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux)
-* Toggle preview (`Shift+CMD+V` on macOS or `Shift+Ctrl+V` on Windows and Linux)
-* Press `Ctrl+Space` (Windows, Linux) or `Cmd+Space` (macOS) to see a list of Markdown snippets
+* add timeout to operations
+* cache imports
+* import errors' location
+* 
