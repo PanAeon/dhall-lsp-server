@@ -1,6 +1,6 @@
 {-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE BangPatterns            #-}
-module Diagnostics(compilerDiagnostics) where
+module Backend.Dhall.Diagnostics(compilerDiagnostics) where
 
 
 {-|
@@ -31,7 +31,7 @@ import Text.Show(ShowS)
 import qualified Data.Set
 import qualified System.FilePath
 
-import DhallErrors(simpleTypeMessage)
+import Backend.Dhall.DhallErrors(simpleTypeMessage)
 
 import Language.Haskell.LSP.Types(
       Diagnostic(..)
@@ -55,7 +55,6 @@ defaultDiagnosticSource :: DiagnosticSource
 defaultDiagnosticSource = "dhall-lsp-server"
 
 -- FIXME: type errors span across whitespace after the expression
--- * TODO: `imported` errors must be handled either as a file error, or much better at import location
 --  Dhall.Binary.DecodingFailure
 --  Dhall.Import(Cycle, ReferentiallyOpaque, MissingFile, MissingEnvironmentVariable, MissingImports,
 --   HashMismatch, CannotImportHTTPURL)
@@ -115,7 +114,7 @@ compilerDiagnostics path filePath txt = handle ast
              , _severity = Just DsError
              , _source = Just defaultDiagnosticSource
              , _code = Nothing
-             , _message =  ("import error: " <> (show e)) -- FIXME: looks like this is a bit wrong
+             , _message =  ("import error: " <> (show e)) -- FIXME: simple show for import msgs
              , _relatedInformation = Nothing
              }]
     moduleErrors e = do
@@ -128,11 +127,11 @@ compilerDiagnostics path filePath txt = handle ast
       , _severity = Just DsError
       , _source = Just defaultDiagnosticSource
       , _code = Nothing
-      , _message =  (simpleTypeMessage msg) -- FIXME: looks like this is a bit wrong
+      , _message =  (simpleTypeMessage msg) -- FIXME: simple show for import msgs
       , _relatedInformation = Nothing
       }] 
 
--- ! FIXME: provide import errors source position
+-- ! FIXME: provide import errors source position (handle upstream)
 -- * Import Errors provide no source pos info, except import mode and ImportType (which contains actual url)
 handleImportErrors :: Text -> IO [Diagnostic] -> IO [Diagnostic]
 handleImportErrors txt =   Control.Exception.handle (importHandler @Cycle)

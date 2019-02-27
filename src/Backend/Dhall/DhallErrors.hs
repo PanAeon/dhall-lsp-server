@@ -1,4 +1,4 @@
-module DhallErrors(simpleTypeMessage) where
+module Backend.Dhall.DhallErrors(simpleTypeMessage) where
 
 import Dhall.TypeCheck
 import qualified Dhall.Diff
