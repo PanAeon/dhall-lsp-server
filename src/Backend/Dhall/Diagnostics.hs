@@ -1,6 +1,8 @@
 {-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE BangPatterns            #-}
-module Backend.Dhall.Diagnostics(compilerDiagnostics) where
+module Backend.Dhall.Diagnostics( compilerDiagnostics
+                                , defaultDiagnosticSource
+                                ) where
 
 
 {-|

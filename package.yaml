@@ -40,6 +40,7 @@ dependencies:
 - unordered-containers
 - yi-rope
 - filepath
+- sorted-list
 
 
 default-extensions:
