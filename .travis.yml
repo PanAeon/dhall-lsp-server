@@ -3,13 +3,11 @@ language: nix
 sudo: false
 
 cache:
+    timeout: 900
     directories:
         - $HOME/.ghc
         - $HOME/.cabal
         - $HOME/.stack
-        - .stack-work
-before_cache:
-    - rm -rf .stack-work/dist/
 matrix:
   fast_finish: true
   include:
