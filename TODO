@@ -1,0 +1,19 @@
+## TODO
+
+**The roadmap** is located at [the vscode plugin repo](https://github.com/PanAeon/vscode-dhall-lsp-server).
+This file is just for convenience and might be outdated or incorrect.
+
+
+* Enable/Disable Trace/Debug output dynamically
+* validation errors
+* multiple dhall versions
+* goto definition
+* doc on hover
+* format
+* lint
+* file/workspace symbols
+* rename
+* add timeout to operations
+* cache imports
+* import errors' location
+* 
