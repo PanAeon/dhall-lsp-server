@@ -46,13 +46,6 @@ import Language.Haskell.LSP.Types(
 
 
 
--- import Text.Megaparsec.Error
-
-exampleDoc :: Text
-exampleDoc = "{ foo = 1"
-           <> ", bar = [3.0, 4.0, 5.0, []]"
-           <> "}"
-
 defaultDiagnosticSource :: DiagnosticSource
 defaultDiagnosticSource = "dhall-lsp-server"
 
@@ -167,27 +160,13 @@ getSourceRange (TypeError ctx expr msg) =  case expr of
                 _        -> error  "expected note" -- $ Range (Position 0 0) (Position (negate 1) 0) -- FIXME: default case 
   where
     unPos = Text.Megaparsec.unPos
--- Megaparsec utils:
 
--- FIXME: add propper error reporting for parse errors
-getSourceRangeFromBundle 
-   :: forall s e. ( Text.Megaparsec.Stream s
-                 , Text.Megaparsec.Error.ShowErrorComponent e
-                 )
-  => Text.Megaparsec.ParseErrorBundle s e -- ^ Parse error bundle to display
-  -> Range
-getSourceRangeFromBundle Text.Megaparsec.Error.ParseErrorBundle {..} = undefined
 
- 
 
-errorBundleTextPretty
-  :: forall s e. ( Text.Megaparsec.Stream s
-                 , Text.Megaparsec.Error.ShowErrorComponent e
-                 )
-  => Text.Megaparsec.ParseErrorBundle s e -- ^ Parse error bundle to display
-  -> String               -- ^ Textual rendition of the bundle
-errorBundleTextPretty Text.Megaparsec.Error.ParseErrorBundle {..} = undefined
-   
+
+---------------------- Megaparsec utils: ----------------------------------------
+
+
 errorBundleToDiagnostics
   :: forall s e. ( Text.Megaparsec.Stream s
   , Text.Megaparsec.Error.ShowErrorComponent e
