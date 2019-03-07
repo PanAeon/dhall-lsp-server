@@ -1,10 +1,16 @@
 
-# dhall-lsp-server
-[![Travis](https://travis-ci.org/PanAeon/dhall-lsp-server.svg?branch=master)](https://travis-ci.org/PanAeon/dhall-lsp-server)
 
-**This project is in alpha state !!!**
+:.:.:.:.:.::.:.:.:.:.::.:.:.:.:.::.:.:.:.:.::.:.:.:.:.:
 
-This is a [Language Server Protocol](https://microsoft.github.io/language-server-protocol/) server implementation for the [Dhall](https://dhall-lang.org) programming language.
+**Project has been migrated** 
+
+:.:.:.:.:.::.:.:.:.:.::.:.:.:.:.::.:.:.:.:.::.:.:.:.:.:
+
+Got to the [dhall-haskell](https://github.com/dhall-lang/dhall-haskell) repo for new builds/documentation.
+I'll update links in the vscode-dhall-lsp-plugin shortly.
+
+
+
 
 
 ## Installation
